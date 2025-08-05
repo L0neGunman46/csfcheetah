@@ -1,4 +1,3 @@
-# File: src/evaluation/evaluator.py
 import torch
 import numpy as np
 import gymnasium as gym
@@ -7,12 +6,18 @@ from typing import List, Tuple, Dict
 from ..models.agent import CSFAgent
 from ..utils.normalizer import StateNormalizer
 from .visualizer import SkillVisualizer
+import torch.nn.functional as F
+from ..utils.x_pos_wrapper import XPosWrapper
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class CSFEvaluator:
     """Evaluator for trained CSF agent"""
+
+    def __init__(self, config: dict):
+        self.config = config
+        self.visualizer = SkillVisualizer()
 
     def evaluate(
         self,
@@ -25,6 +30,7 @@ class CSFEvaluator:
 
         # 1. Environment setup
         env = gym.make(self.config["environment"]["name"], render_mode="rgb_array")
+        env = XPosWrapper(env)
         state_dim = env.observation_space.shape[0]
         action_dim = env.action_space.shape[0]
 
@@ -37,8 +43,10 @@ class CSFEvaluator:
             hidden_dim=self.config["model"]["hidden_dim"],
         )
         iteration = agent.load_models(checkpoint_path)
+
         normalizer = StateNormalizer(state_dim)
-        normalizer.load(checkpoint_path.replace(".pt", "_normalizer.pkl"))
+        norm_path = checkpoint_path.replace(".pt", "_normalizer.pkl")
+        normalizer.load(norm_path)
 
         print(f"Evaluating CSF agent from iteration {iteration}")
 
@@ -58,14 +66,15 @@ class CSFEvaluator:
                 total_return = 0.0
 
                 for step in range(max_steps):
-                    # Normalize state
-                    normalized_state = (state - state.mean()) / (
-                        state.std() + 1e-8
-                    )
+                    # Normalize state using saved normalizer
+                    normalized_state = normalizer.normalize(state)
                     state_tensor = (
-                        torch.FloatTensor(normalized_state).unsqueeze(0).to(device)
+                        torch.from_numpy(normalized_state)
+                        .float()
+                        .unsqueeze(0)
+                        .to(device)
                     )
-                    skill_tensor = skill.unsqueeze(0).to(device)
+                    skill_tensor = skill.float().unsqueeze(0).to(device)
 
                     # Action
                     action = agent.policy.sample_action(
@@ -74,8 +83,12 @@ class CSFEvaluator:
                     action_np = action.cpu().numpy().flatten()
 
                     # Step environment
-                    next_obs, reward, term, trunc, _ = env.step(action_np)
-                    trajectory.append({"x_pos": next_obs[0]})
+                    next_obs, reward, term, trunc, info = env.step(action_np)
+
+                    # Prefer env-provided x_pos; fallback to observation index 0
+                    x_pos = info.get("x_pos", float(next_obs[0]))
+                    trajectory.append({"x_pos": x_pos})
+
                     total_return += reward
                     state = next_obs
 
@@ -94,28 +107,56 @@ class CSFEvaluator:
                 f"Skill {skill_idx+1}: Return = {avg_return:.2f} ± {std_return:.2f}"
             )
 
-        # 4. Zero-shot goal-reaching evaluation
+        # 4. Zero-shot goal-reaching evaluation (infer skill instead of sampling)
         np.random.seed(0)
         goals = np.random.uniform(-100, 100, size=50).tolist()
         zero_shot_trajs: List[List[Dict]] = []
 
+        agent.phi.eval()
+        agent.policy.eval()
+
         for goal in goals:
-            skill = agent.sample_skill()
             traj: List[Dict] = []
             obs, _ = env.reset()
             state = obs
 
+            # Create a goal "state" by copying obs and setting x to goal (simple heuristic)
+            goal_state = np.array(state, dtype=np.float32).copy()
+            goal_state[0] = goal
+
             for step in range(max_steps):
-                normalized_state = (state - state.mean()) / (state.std() + 1e-8)
-                st = torch.FloatTensor(normalized_state).unsqueeze(0).to(device)
-                sk = skill.unsqueeze(0).to(device)
-                act = agent.policy.sample_action(st, sk, noise_scale=0.0).cpu().numpy().flatten()
+                norm_state = normalizer.normalize(state)
+                norm_goal = normalizer.normalize(goal_state)
 
-                obs, _, term, trunc, _ = env.step(act)
-                traj.append({"x_pos": obs[0]})
+                s_tensor = torch.from_numpy(norm_state).float().to(device)
+                g_tensor = torch.from_numpy(norm_goal).float().to(device)
 
+                with torch.no_grad():
+                    phi_s = agent.phi(s_tensor)
+                    phi_g = agent.phi(g_tensor)
+                    skill_vec = phi_g - phi_s
+                    if torch.norm(skill_vec) > 1e-6:
+                        skill_vec = F.normalize(skill_vec, p=2, dim=-1)
+
+                act = (
+                    agent.policy.sample_action(
+                        s_tensor.unsqueeze(0),
+                        skill_vec.unsqueeze(0),
+                        noise_scale=0.0,
+                    )
+                    .cpu()
+                    .numpy()
+                    .flatten()
+                )
+
+                obs, _, term, trunc, info = env.step(act)
+                x_pos = info.get("x_pos", float(obs[0]))
+                traj.append({"x_pos": x_pos})
+
+                state = obs
                 if term or trunc:
                     break
+
             zero_shot_trajs.append(traj)
 
         success_rate = self.compute_success_rate(zero_shot_trajs, goals)

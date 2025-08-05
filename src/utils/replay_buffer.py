@@ -1,5 +1,3 @@
-# File: src/utils/replay_buffer.py
-
 import torch
 import numpy as np
 from collections import deque
@@ -8,8 +6,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class ReplayBuffer:
-    """Experience replay buffer"""
-    
     def __init__(self, capacity: int):
         self.capacity = capacity
         self.buffer = deque(maxlen=capacity)

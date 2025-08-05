@@ -1,5 +1,3 @@
-# File: src/training/trainer.py
-
 import torch
 import numpy as np
 import gymnasium as gym  # Updated import
@@ -15,6 +13,7 @@ from ..utils.normalizer import StateNormalizer
 from ..utils.metrics import compute_state_coverage
 from ..utils.csv_logger import CSVLogger, MetricsTracker
 from ..evaluation.visualizer import SkillVisualizer
+from ..utils.x_pos_wrapper import XPosWrapper
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -36,6 +35,7 @@ class CSFTrainer:
             env_kwargs['max_episode_steps'] = env_config['max_episode_steps']
         
         self.env = gym.make(env_config['name'], **env_kwargs)
+        self.env = XPosWrapper(self.env)
         
         
         # Get environment dimensions
@@ -169,7 +169,7 @@ class CSFTrainer:
             done = terminated or truncated
             
             # Store position for coverage computation
-            x_position = info.get('x_position', state[0])
+            x_position = float(info.get('x_position', state[0]))
             episode_positions.append(x_position)
             
             # Normalize next state
@@ -284,23 +284,7 @@ class CSFTrainer:
         except Exception as e:
             print(f"Skill visualization failed: {e}")
             eval_metrics['skill_visualization'] = 'failed'
-        
-        try:
-            # Plot coverage history
-            coverage_fig = self.visualizer.plot_coverage_history(self.state_positions)
             
-            coverage_fig.savefig(
-                os.path.join(self.config['paths']['log_dir'], f"coverage_{self.timestep}.png"),
-                dpi=150, bbox_inches='tight'
-            )
-            plt.close(coverage_fig) # <--- CORRECTED LINE
-            
-            eval_metrics['coverage_plot'] = 'success'
-            
-        except Exception as e:
-            print(f"Coverage plotting failed: {e}")
-            eval_metrics['coverage_plot'] = 'failed'
-        
         try:
             # Plot coverage history
             coverage_fig = self.visualizer.plot_coverage_history(self.state_positions)

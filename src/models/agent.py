@@ -64,8 +64,8 @@ class CSFAgent:
         
     def sample_skill(self):
         """Sample skill from uniform distribution on unit hypersphere"""
-        skill = torch.randn(self.skill_dim)
-        skill = skill / torch.norm(skill)
+        skill = torch.randn(self.skill_dim, device=device , dtype= torch.float32)
+        skill = skill / (torch.norm(skill) + 1e-8)
         return skill
     
     def contrastive_loss(self, states, next_states, skills):
@@ -75,16 +75,24 @@ class CSFAgent:
         phi_s_next = self.phi(next_states)
         repr_diff = phi_s_next - phi_s
 
-        # original contrastive terms
+        # positive term
         positive_term = torch.sum(repr_diff * skills, dim=1)
-        negative_skills = skills[torch.randperm(batch_size)]
-        negative_scores = torch.sum(repr_diff.unsqueeze(1) * negative_skills.unsqueeze(0), dim=2)
-        negative_term = torch.logsumexp(negative_scores, dim=1) - np.log(batch_size)
+
+        # full in-batch negatives
+        perm = torch.randperm(batch_size, device=states.device)
+        negative_skills = skills[perm]
+        negative_scores = torch.sum(
+            repr_diff.unsqueeze(1) * negative_skills.unsqueeze(0), dim=2
+        )
+        # use torch.log on device
+        negative_term = torch.logsumexp(negative_scores, dim=1) - torch.log(
+            torch.tensor(float(batch_size), device=states.device, dtype=states.dtype)
+        )
+
         loss = -torch.mean(positive_term) + self.xi * torch.mean(negative_term)
 
-        # information-bottleneck regularizer
-        z_prior = torch.randn_like(phi_s)
-        mi_penalty = self.beta_ib * torch.mean((phi_s ** 2).sum(dim=1))
+        # information bottleneck regularizer
+        mi_penalty = self.beta_ib * torch.mean((phi_s**2).sum(dim=1))
         loss += mi_penalty
 
         return loss, torch.mean(positive_term).item(), torch.mean(negative_term).item()

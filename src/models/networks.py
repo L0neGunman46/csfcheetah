@@ -7,17 +7,24 @@ import torch.nn.utils.parametrizations as P
 class StateEncoder(nn.Module):
     """State representation network φ"""
     
-    def __init__(self, state_dim: int, hidden_dim: int = 1024, repr_dim: int = 2):
+    def __init__(self, state_dim: int, skill_dim: int, hidden_dim: int = 1024):
         super().__init__()
+        self.state_dim = state_dim
+        self.skill_dim = skill_dim
         self.network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, repr_dim)
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, skill_dim)
         )
-        P.orthogonal(self.network[-1], "weight")
-    
+
     def forward(self, state):
-        return self.network(state)
+        # Output a vector for the skill
+        skill_vec = self.network(state)
+        # Normalize to unit sphere
+        skill_vec = F.normalize(skill_vec, p=2, dim=-1)
+        return skill_vec
 
 
 class SuccessorFeatures(nn.Module):

@@ -1,10 +1,3 @@
-#!/usr/bin/env python3
-"""
-scripts/train_hrl.py
-Hierarchical fine-tuning after CSF pre-training.
-Freezes φ and ψ, trains a high-level policy π_meta(z|s) with SAC.
-"""
-
 import argparse
 import time
 from typing import Dict, Any
@@ -56,7 +49,7 @@ class SAC:
         if len(buffer) < batch_size:
             return
         states, skills, rewards, next_states, dones = buffer.sample_hrl(batch_size)
-
+        dones_f = dones.float()
         # critic loss
         with torch.no_grad():
             next_q = self.target_critic(next_states, skills)
@@ -149,8 +142,8 @@ def train_hrl(config: Dict[str, Any], checkpoint_path: str):
                 option_return += reward
                 if term or trunc:
                     break
-
-            replay.push(state, skill_vec, option_return, state, term)
+            done = bool(term or trunc)
+            replay.push(state, skill_vec, option_return, state, done)
             episode_return += option_return
             if term or trunc:
                 break
