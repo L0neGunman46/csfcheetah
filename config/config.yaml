@@ -1,0 +1,51 @@
+# CSF Configuration for HalfCheetah-v5 (1 Million Timesteps)
+
+environment:
+  name: "HalfCheetah-v5"
+  max_episode_steps: 1000
+  render_mode: null
+
+model:
+  skill_dim: 2
+  repr_dim: 2
+  hidden_dim: 1024
+
+training:
+  total_timesteps: 1000000
+  lr: 0.0001
+  gamma: 0.99
+  tau: 0.005
+  xi: 5.0
+  batch_size: 256
+  buffer_size: 1000000   # <-- CHANGED: Match buffer size to total timesteps.
+
+logging:
+  log_interval: 10000     # <-- CHANGED: Log more frequently for a more detailed curve.
+  eval_interval: 25000    # <-- CHANGED: Evaluate more often to see progress.
+  save_interval: 100000   # <-- CHANGED: Save checkpoints more often.
+
+# This section is for post-training evaluation and is fine as is.
+evaluation:
+  num_episodes: 10
+  num_skills: 8
+  max_steps: 1000
+
+paths:
+  save_dir: "./experiments/halfcheetah_1M"
+  log_dir: "./logs/halfcheetah_1M"
+
+# This section is for post-training evaluation and is fine as is.
+zeroshot:
+  num_episodes: 50
+  max_steps: 1000
+  goal_sampling_range: [-100.0, 100.0]
+  goal_threshold: 0.5
+
+# This section is for a separate HRL training phase and is fine as is.
+hrl:
+  downstream_env: "HalfCheetahHurdle-v0"
+  total_episodes: 100000
+  meta_policy_lr: 0.0001
+  option_timesteps: 10
+  hrl_batch_size: 256
+  hrl_buffer_size: 1000000
