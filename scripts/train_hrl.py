@@ -1,3 +1,10 @@
+#!/usr/bin/env python3
+"""
+scripts/train_hrl.py
+Hierarchical fine-tuning after CSF pre-training.
+Freezes φ and ψ, trains a high-level policy π_meta(z|s) with SAC.
+"""
+
 import argparse
 import time
 from typing import Dict, Any
@@ -6,18 +13,23 @@ import gymnasium as gym
 import numpy as np
 import torch
 import yaml
-
-# ---- local imports ----
+import os
+import sys
+script_dir = os.path.dirname(__file__)
+project_root = os.path.abspath(os.path.join(script_dir, '..'))
+sys.path.insert(0, project_root)
 from src.models.agent import CSFAgent
 from src.models.networks import MetaPolicy, MetaCritic
 from src.utils.normalizer import StateNormalizer
 from src.utils.replay_buffer import ReplayBuffer
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class SAC:
     """Minimal SAC for the high-level policy."""
+
     def __init__(
         self,
         policy: MetaPolicy,
@@ -29,9 +41,7 @@ class SAC:
     ):
         self.policy = policy
         self.critic = critic
-        self.target_critic = MetaCritic(
-            policy.state_dim, policy.skill_dim
-        ).to(device)
+        self.target_critic = MetaCritic(policy.state_dim, policy.skill_dim).to(device)
         self.target_critic.load_state_dict(critic.state_dict())
 
         self.policy_opt = torch.optim.Adam(policy.parameters(), lr=lr)
@@ -49,11 +59,13 @@ class SAC:
         if len(buffer) < batch_size:
             return
         states, skills, rewards, next_states, dones = buffer.sample_hrl(batch_size)
+
         dones_f = dones.float()
+
         # critic loss
         with torch.no_grad():
             next_q = self.target_critic(next_states, skills)
-            target_q = rewards + self.gamma * next_q * (1 - dones.float())
+            target_q = rewards + self.gamma * next_q * (1 - dones_f)
         current_q = self.critic(states, skills)
         critic_loss = ((current_q - target_q) ** 2).mean()
 
@@ -102,11 +114,7 @@ def train_hrl(config: Dict[str, Any], checkpoint_path: str):
     # 2. high-level networks
     meta_policy = MetaPolicy(state_dim, skill_dim).to(device)
     meta_critic = MetaCritic(state_dim, skill_dim).to(device)
-    sac = SAC(
-        meta_policy,
-        meta_critic,
-        lr=config["hrl"]["meta_policy_lr"],
-    )
+    sac = SAC(meta_policy, meta_critic, lr=config["hrl"]["meta_policy_lr"])
 
     replay = ReplayBuffer(config["hrl"]["hrl_buffer_size"])
     option_len = config["hrl"]["option_timesteps"]
@@ -122,30 +130,39 @@ def train_hrl(config: Dict[str, Any], checkpoint_path: str):
 
         for _ in range(1000 // option_len):
             # high-level decision
-            s_tensor = torch.FloatTensor(
-                normalizer.normalize(state)
-            ).unsqueeze(0).to(device)
+            s_tensor = (
+                torch.FloatTensor(normalizer.normalize(state))
+                .unsqueeze(0)
+                .to(device)
+            )
             skill_vec = sac.select_action(s_tensor).cpu().numpy().flatten()
 
             # low-level rollout
             option_return = 0.0
             for _ in range(option_len):
-                st = torch.FloatTensor(
-                    normalizer.normalize(state)
-                ).unsqueeze(0).to(device)
+                st = (
+                    torch.FloatTensor(normalizer.normalize(state))
+                    .unsqueeze(0)
+                    .to(device)
+                )
                 sk = torch.FloatTensor(skill_vec).unsqueeze(0).to(device)
-                action = agent.policy.sample_action(
-                    st, sk, noise_scale=0.0
-                ).cpu().numpy().flatten()
+                action = (
+                    agent.policy.sample_action(st, sk, noise_scale=0.0)
+                    .cpu()
+                    .numpy()
+                    .flatten()
+                )
 
                 state, reward, term, trunc, _ = env.step(action)
                 option_return += reward
                 if term or trunc:
                     break
+
             done = bool(term or trunc)
-            replay.push(state, skill_vec, option_return, state, done)
+            # HRL buffer expects (state, skill, reward, next_state, done)
+            replay.push_hrl(state, skill_vec, option_return, state, done)
             episode_return += option_return
-            if term or trunc:
+            if done:
                 break
 
         sac.update(replay, batch_size)

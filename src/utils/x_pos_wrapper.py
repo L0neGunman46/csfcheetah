@@ -23,7 +23,6 @@ class XPosWrapper(gym.Wrapper):
 
     def _get_x_pos_fallback(self, obs):
         try:
-            # Gymnasium Mujoco API
             return float(self.env.unwrapped.data.qpos[0])
         except Exception:
             return float(obs[0])

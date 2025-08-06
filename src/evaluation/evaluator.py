@@ -2,11 +2,11 @@ import torch
 import numpy as np
 import gymnasium as gym
 from typing import List, Tuple, Dict
+import torch.nn.functional as F
 
 from ..models.agent import CSFAgent
 from ..utils.normalizer import StateNormalizer
 from .visualizer import SkillVisualizer
-import torch.nn.functional as F
 from ..utils.x_pos_wrapper import XPosWrapper
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -59,14 +59,13 @@ class CSFEvaluator:
             episode_returns: List[float] = []
             episode_trajectories: List[Dict] = []
 
-            for ep in range(num_episodes):
+            for _ in range(num_episodes):
                 obs, _ = env.reset()
                 state = obs
                 trajectory: List[Dict] = []
                 total_return = 0.0
 
-                for step in range(max_steps):
-                    # Normalize state using saved normalizer
+                for _ in range(max_steps):
                     normalized_state = normalizer.normalize(state)
                     state_tensor = (
                         torch.from_numpy(normalized_state)
@@ -76,19 +75,14 @@ class CSFEvaluator:
                     )
                     skill_tensor = skill.float().unsqueeze(0).to(device)
 
-                    # Action
                     action = agent.policy.sample_action(
                         state_tensor, skill_tensor, noise_scale=0.0
                     )
                     action_np = action.cpu().numpy().flatten()
 
-                    # Step environment
                     next_obs, reward, term, trunc, info = env.step(action_np)
-
-                    # Prefer env-provided x_pos; fallback to observation index 0
                     x_pos = info.get("x_pos", float(next_obs[0]))
                     trajectory.append({"x_pos": x_pos})
-
                     total_return += reward
                     state = next_obs
 
@@ -120,11 +114,10 @@ class CSFEvaluator:
             obs, _ = env.reset()
             state = obs
 
-            # Create a goal "state" by copying obs and setting x to goal (simple heuristic)
             goal_state = np.array(state, dtype=np.float32).copy()
             goal_state[0] = goal
 
-            for step in range(max_steps):
+            for _ in range(max_steps):
                 norm_state = normalizer.normalize(state)
                 norm_goal = normalizer.normalize(goal_state)
 
